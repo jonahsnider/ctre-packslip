@@ -1,0 +1,44 @@
+{
+	"name": "ctre-packslip",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"build": "tsc --noEmit",
+		"format": "oxfmt --check",
+		"format:fix": "oxfmt",
+		"knip": "knip",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"plan": "node src/cli.ts plan",
+		"prepare-release": "node src/cli.ts prepare",
+		"test": "node --test"
+	},
+	"dependencies": {
+		"fetch-extras": "3.2.1",
+		"semver": "7.8.5",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@tsconfig/node-ts": "23.6.4",
+		"@tsconfig/node26": "26.0.1",
+		"@tsconfig/recommended": "1.0.13",
+		"@tsconfig/strictest": "2.0.8",
+		"@types/node": "26.6.2",
+		"@types/semver": "7.8.0",
+		"knip": "6.37.0",
+		"oxfmt": "0.68.0",
+		"oxlint": "1.83.0",
+		"oxlint-tsgolint": "7.0.2002",
+		"typescript": "7.0.2"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": "26.x",
+			"onFail": "warn"
+		}
+	},
+	"packageManager": "pnpm@12.5.1"
+}

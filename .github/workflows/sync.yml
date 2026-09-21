@@ -1,0 +1,157 @@
+name: Sync CTRE releases
+
+on:
+  schedule:
+    - cron: '37 8 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ctre-packslip-sync
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/setup@v2
+        with:
+          cache: true
+      - id: plan
+        name: Read CTRE release index
+        shell: bash
+        run: echo "matrix=$(node src/cli.ts plan)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish ${{ matrix.tool }} ${{ matrix.version }}
+    needs: plan
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PACKSLIP_VERSION: '1.2.0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup pnpm
+        uses: pnpm/setup@v2
+        with:
+          cache: true
+
+      - id: existing
+        name: Check for an existing Packslip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.tag }}
+          BUNDLE: packslip.${{ matrix.tool }}.sigstore.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets 2>/dev/null |
+            jq -e --arg bundle "$BUNDLE" '.assets | any(.name == $bundle)' >/dev/null
+          then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: prepare
+        name: Download and check CTRE artifacts
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          TOOL: ${{ matrix.tool }}
+          UPSTREAM_VERSION: ${{ matrix.upstreamVersion }}
+          TAG: ${{ matrix.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/$TAG"
+          mkdir -p "$output"
+          node src/cli.ts prepare --tool "$TOOL" --upstream-version "$UPSTREAM_VERSION" --out "$output"
+          echo "directory=$output" >> "$GITHUB_OUTPUT"
+
+      - name: Install verified Packslip CLI
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          directory="$RUNNER_TEMP/packslip-bin"
+          asset="packslip-v$PACKSLIP_VERSION-linux-x64.tar.xz"
+          mkdir -p "$directory"
+          gh release download "v$PACKSLIP_VERSION" --repo jdx/packslip --pattern "$asset" --dir "$directory"
+          gh attestation verify "$directory/$asset" --repo jdx/packslip
+          tar -xJf "$directory/$asset" -C "$directory" --strip-components=1
+          echo "$directory" >> "$GITHUB_PATH"
+
+      - id: packslip
+        name: Create and verify repackager manifest
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          TOOL: ${{ matrix.tool }}
+          VERSION: ${{ matrix.version }}
+          DIRECTORY: ${{ steps.prepare.outputs.directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="github.com/$GITHUB_REPOSITORY/$TOOL"
+          packslip create \
+            --manifest "$DIRECTORY/release.toml" \
+            --project "$project" \
+            --version "$VERSION" \
+            --attested-by repackager \
+            --evidence "checksum-file-over-tls=https://redist.ctr-electronics.com/index.json (MD5 and SHA-1)" \
+            --out "$DIRECTORY/packslip"
+
+          bundle="$DIRECTORY/packslip/packslip.$TOOL.sigstore.json"
+          artifact_args=()
+          while IFS= read -r -d '' artifact; do
+            artifact_args+=(--artifact "$artifact")
+          done < <(find "$DIRECTORY/artifacts" -type f -print0)
+
+          packslip verify "$bundle" \
+            --identity-prefix "https://github.com/$GITHUB_REPOSITORY/" \
+            --issuer https://token.actions.githubusercontent.com \
+            "${artifact_args[@]}"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Packslip-only GitHub release
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.tag }}
+          TOOL: ${{ matrix.tool }}
+          UPSTREAM_VERSION: ${{ matrix.upstreamVersion }}
+          BUNDLE: ${{ steps.packslip.outputs.bundle }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="Unofficial repackager Packslip for CTRE $TOOL $UPSTREAM_VERSION.
+
+          The binary URLs in this manifest point directly to redist.ctr-electronics.com.
+          This release does not contain or redistribute CTRE binaries."
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$BUNDLE" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$BUNDLE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --latest=false \
+              --title "$TOOL $UPSTREAM_VERSION" \
+              --notes "$notes"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          fi

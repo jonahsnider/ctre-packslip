@@ -1,0 +1,7 @@
+{
+	"extends": ["@tsconfig/strictest", "@tsconfig/recommended", "@tsconfig/node26", "@tsconfig/node-ts"],
+	"compilerOptions": {
+		"noEmit": true
+	},
+	"include": ["src/**/*.ts", "test/**/*.ts", "knip.config.ts"]
+}
