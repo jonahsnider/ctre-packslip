@@ -18,8 +18,9 @@ jobs:
         uses: pnpm/setup@v3
         with:
           cache: true
-      - run: pnpm format
-      - run: pnpm lint
-      - run: pnpm test
-      - run: pnpm knip
-      - run: pnpm build
+      - parallel:
+          - run: pnpm format
+          - run: pnpm lint
+          - run: pnpm test
+          - run: pnpm knip
+          - run: pnpm build
